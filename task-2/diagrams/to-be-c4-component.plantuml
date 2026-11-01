@@ -1,0 +1,57 @@
+@startuml
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Component Diagram — Bidding Service (внутреннее устройство)
+
+Person_Ext(dspPartner, "DSP-партнёр")
+
+System_Ext(b2bGateway, "B2B Gateway")
+System_Ext(adServer, "Ad Server", "Подбирает кандидатов для аукциона")
+System_Ext(deliveryService, "Delivery Service", "Формирует разметку баннера и ответ пользователю")
+
+System_Ext(redis, "Redis", "записи победителей, баланса")
+
+Container_Boundary(biddingService, "Bidding Service") {
+
+  Component(apiFacade, "API Facade", "Принимает запрос на подбор победителя от Ad Server, валидирует контракт")
+
+  Component(targetingFilter, "Targeting Filter", "Фильтрует кандидатов по условиям (geo, device)")
+
+  Component(auctionEngine, "Auction Engine", "Взвешивание ставок, бизнес-правила, расчёт победителя")
+
+  Component(budgetChecker, "Budget Checker", "Проверяет баланс рекламодателя из balanceCache")
+
+  Component(winnerWriter, "Winner Writer", "Пишет победителя в кеш и передет Delivery Service")
+
+  Component(fallbackHandler, "Fallback Handler", "локальный кеш, дефолтная ставка при деградации")
+
+  Component(circuitBreaker, "Circuit Breaker", "Защита вызовов внешних систем (Redis, Delivery)")
+
+}
+
+Rel(dspPartner, b2bGateway, "bid-requests")
+Rel(b2bGateway, adServer, "bid-request")
+Rel(adServer, apiFacade, "Запрос на подбор победителя")
+
+Rel(apiFacade, targetingFilter, "Кандидаты")
+Rel(targetingFilter, auctionEngine, "Отфильтрованные кандидаты")
+Rel(auctionEngine, budgetChecker, "Запрос проверки баланса")
+Rel(budgetChecker, auctionEngine, "Баланс подтверждён")
+Rel(auctionEngine, winnerWriter, "Победитель аукциона")
+Rel(winnerWriter, deliveryService, "Победитель аукциона")
+
+Rel(targetingFilter, redis, "Читает кеш кампаний")
+Rel(budgetChecker, redis, "Читает кеш баланса")
+Rel(winnerWriter, redis, "Пишет кеш победителя")
+
+Rel(circuitBreaker, redis, "Защищает чтение/запись кеша")
+Rel(circuitBreaker, deliveryService, "Защищает вызов Delivery")
+
+Rel(apiFacade, fallbackHandler, "При деградации: локальный кеш/дефолт")
+Rel(fallbackHandler, b2bGateway, "Ответ из кеша")
+
+
+@enduml
