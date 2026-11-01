@@ -1,0 +1,94 @@
+@startuml
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+LAYOUT_TOP_DOWN()
+
+title C4 Container — Архитектура данных AdScale (Database per Service)
+
+System_Boundary(services, "Сервисы AdScale") {
+
+  Container(campaignService, "Campaign Service", "Владелец данных кампаний")
+  Container(financialService, "Financial Service", "Владелец финансовых данных")
+  Container(paymentService, "Payment Service", "Пополнение баланса")
+  Container(statsService, "Statistics Service", "Пишет события кликов/показов")
+  Container(analyticsService, "Analytics Service", "Готовит отчёты")
+  Container(biddingService, "Bidding Service", "Читает проекции, пишет победителя")
+  Container(adServer, "Ad Server", "Читает проекцию кампаний")
+  Container(deliveryService, "Delivery Service", "Пишет события, читает кеш")
+  Container(adCabinet, "Advertiser Dashboard", "Заказывает и читает отчёты")
+
+}
+
+System_Boundary(dbs, "Базы данных") {
+
+  ContainerDb(campaignDb, "Campaign DB", "PostgreSQL", "Кампании, таргетинг, бюджеты")
+
+  ContainerDb(financeDb, "Finance DB", "PostgreSQL", "Проводки, балансы")
+
+  ContainerDb(eventsDb, "Events DB", "ClickHouse", "События кликов/показов")
+
+  ContainerDb(reportDb, "Report DB", "PostgreSQL", "Метаданные отчётов")
+
+  ContainerDb(objectStorage, "Object Storage", "Файлы отчётов")
+
+}
+
+System_Boundary(redis, "Redis") {
+
+  ContainerDb(redisHot, "Redis hot-path","Кампании, бюджеты, ставки, шаблоны")
+
+  ContainerDb(winnerCache, "Winner cache", "Победитель аукциона")
+
+}
+
+System_Boundary(kafka, "Kafka(Avro + Schema Registry)") {
+
+  ContainerQueue(campaignTopic, "campaignTopic", "CRUD кампаний")
+
+  ContainerQueue(clickTopic, "clickTopic", "Клики, показы")
+
+  ContainerQueue(paymentTopic, "paymentTopic", "Платежи")
+
+  ContainerQueue(balanceTopic, "balanceTopic", "Изменения баланса")
+
+  ContainerQueue(reqReportTopic, "reqReportTopic", "Заказы отчётов")
+
+  ContainerQueue(respReportTopic, "respReportTopic", "Готовность отчётов")
+
+}
+
+Rel(campaignService, campaignDb, "Читает/пишет")
+Rel(financialService, financeDb, "Читает/пишет (транзакции)")
+Rel(statsService, eventsDb, "Пакетная запись событий")
+Rel(analyticsService, reportDb, "Пишет метаданные отчётов")
+Rel(analyticsService, objectStorage, "Пишет файлы отчётов")
+
+Rel(campaignService, campaignTopic, "Публикует изменения")
+Rel(paymentService, paymentTopic, "Публикует платежи")
+Rel(financialService, balanceTopic, "Публикует изменения баланса")
+Rel(deliveryService, clickTopic, "Пишет клики/показы")
+Rel(adCabinet, reqReportTopic, "Заказывает отчёт")
+Rel(analyticsService, respReportTopic, "Пишет готовность отчёта")
+
+Rel(clickTopic, statsService, "Читает события")
+Rel(clickTopic, financialService, "Читает клики для списаний")
+Rel(clickTopic, analyticsService, "Читает события")
+Rel(paymentTopic, financialService, "Читает платежи")
+Rel(paymentTopic, statsService, "Читает платежи для отчётов")
+Rel(reqReportTopic, analyticsService, "Читает заказы отчётов")
+Rel(respReportTopic, adCabinet, "Читает готовность",)
+
+Rel(campaignTopic, redisHot, "Проекция обновляется из событий")
+Rel(balanceTopic, redisHot, "Проекция обновляется из событий")
+
+Rel(adServer, redisHot, "Читает проекцию кампаний")
+Rel(biddingService, redisHot, "Читает ставки/бюджеты")
+Rel(biddingService, winnerCache, "Пишет победителя")
+Rel(deliveryService, winnerCache, "Читает победителя")
+Rel(deliveryService, redisHot, "Читает креатив (проекция)")
+
+Rel(reportDb, objectStorage, "Отчет")
+
+@enduml
