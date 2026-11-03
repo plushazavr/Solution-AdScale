@@ -1,0 +1,46 @@
+@startuml
+title Sequence — основной поток RTB (бюджет 80 мс P95)
+
+autonumber
+
+participant "DSP" as DSP
+participant "B2B Gateway" as GW
+participant "Ad Server" as AS
+participant "Bidding Service" as BS
+database "Redis" as R
+participant "Delivery Service" as DS
+queue "Kafka" as K
+
+DSP -> GW: bid-request (OpenRTB, traceId)
+note right: < 2 мс (TLS handshake в кэше)
+
+GW -> AS: bid-request (gRPC)
+note right: < 2 мс
+
+AS -> BS: Передать кандидатов(gRPC)
+note right: < 2 мс
+
+BS -> R: Получить данные кампании
+note right: < 1 мс
+R --> BS: Данные кампании
+
+BS -> R: Зарезервировать бюджет
+note right: < 2 мс
+R --> BS: ok
+
+BS -> BS: Определение победителя
+
+BS -> R: Запись победителя
+note right: < 1 мс
+R --> BS: ok
+
+BS --> AS: Ответ (победитель + цена)
+note right: < 5 мс
+
+AS --> GW: Ответ (победитель + цена)\nbid-response
+note right: < 2 мс
+
+GW --> DSP: bid-response (OpenRTB)
+note right: < 2 мс
+
+@enduml

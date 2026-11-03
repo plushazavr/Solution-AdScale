@@ -10,10 +10,27 @@
 | reqReportTopic  | Advertiser Dashboard | Analytics Service                                        | Заказы отчётов                   | 7 дней   |
 | respReportTopic | Analytics Service    | Advertiser Dashboard                                     | Готовность отчётов               | 7 дней   |
 
+## Группы потребителей
+
+| Группа | Читает | Пишет |
+|---|---|---|
+| `group-stats` | clickTopic | ClickHouse (Statistics) |
+| `group-financial` | clickTopic, paymentTopic | PostgreSQL (Financial) |
+| `group-cache-campaigns` | campaignTopic, balanceTopic | Redis |
+| `group-analytics` | reqReportTopic, clickTopic | PostgreSQL (Analytics) |
+| `group-report-notify` | respReportTopic | Advertiser Dashboard |
+
 ## Схема событий
 Avro + Schema Registry. Поля: event_id, event_type, timestamp, correlation_id, business_data.
 At-least-once для всех топиков.
 Идемпотентность по event_id.
+
+Общие поля для всех событий:
+- `event_id` — уникальный идентификатор события (UUID), ключ идемпотентности
+- `event_type` — тип события (`click`, `impression`, `payment`, `campaign_changed`, `balance_changed`)
+- `timestamp` — время события
+- `correlation_id` — идентификатор для трассировки (сквозной `requestId`)
+- `business_data` — объект с полезной нагрузкой (зависит от типа)
 
 
 ## Политика хранения
