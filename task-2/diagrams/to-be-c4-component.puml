@@ -20,7 +20,7 @@ Container_Boundary(biddingService, "Bidding Service") {
 
   Component(targetingFilter, "Targeting Filter", "Фильтрует кандидатов по условиям (geo, device)")
 
-  Component(auctionEngine, "Auction Engine", "Взвешивание ставок, бизнес-правила, расчёт победителя")
+  Component(auctionEngine, "Auction Engine", "Взвешивание ставок, бизнес-правила, win-rate, расчёт победителя")
 
   Component(budgetChecker, "Budget Checker", "Проверяет баланс рекламодателя из balanceCache")
 
