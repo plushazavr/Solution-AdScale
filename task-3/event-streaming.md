@@ -15,10 +15,10 @@
  
 | Группа | Читает | Пишет |
 |---|---|---|
-| `group-stats` | clickTopic | ClickHouse (Statistics) |
-| `group-financial` | clickTopic, paymentTopic | PostgreSQL (Financial) |
+| `group-stats` | clickTopic, impressionTopic | ClickHouse (Statistics) |
+| `group-financial` | clickTopic, paymentTopic, impressionTopic | PostgreSQL (Financial) |
 | `group-cache-campaigns` | campaignTopic, balanceTopic | Redis |
-| `group-analytics` | reqReportTopic, clickTopic | PostgreSQL (Analytics) |
+| `group-analytics` | reqReportTopic, clickTopic, impressionTopic | PostgreSQL (Analytics) |
 | `group-report-notify` | respReportTopic | Advertiser Dashboard |
  
 ## Схема событий
@@ -129,6 +129,12 @@ Avro + Schema Registry. At-least-once для всех топиков. Идемп
             ],
             "default": null,
             "doc": "Геолокация"
+          },
+          {
+            "name": "confirmedAt",
+            "type": ["null", "long"],
+            "default": null,
+            "doc": "Timestamp окончательного подтверждения показа (момент фиксации в Financial Service)"
           },
           {
             "name": "reservationStatus",
