@@ -1,0 +1,114 @@
+@startuml
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Container Diagram — AdScale (To-Be, Bounded Contexts)
+
+Person(advertiser, "Рекламодатель", "Управляет кампаниями и бюджетами")
+Person_Ext(endUser, "Пользователь", "Смотрит рекламу и кликает")
+System_Ext(dspPartner, "DSP-партнёр", "Присылает bid-requests по OpenRTB")
+System_Ext(paymentGateway, "Платёжный шлюз", "Пополнение бюджета")
+
+Boundary(gateways, "Gateway Layer (edge)") {
+  Container(B2BGateway, "B2B Gateway", "API Gateway", "Принимает запросы от DSP")
+  Container(B2CGateway, "B2C Gateway", "API Gateway", "Принимает запросы от пользователей")
+  Container(DashboardGateway, "Dashboard Gateway", "API Gateway", "Принимает запросы от кабинета")
+}
+
+Boundary(campaignCtx, "Bounded Context: Campaign Management") {
+  Container(campaignService, "Campaign Service", "Go", "CRUD кампаний, бюджетов и ставок")
+  ContainerDb(campaignDb, "БД Кампании", "PostgreSQL", "Данные кампаний (владелец: Campaign)")
+}
+
+Boundary(biddingCtx, "Bounded Context: Ad Serving / Bidding") {
+  Container(adServer, "Ad Server", "Go/C++", "Принимает bid-requests, подбирает кандидатов")
+  Container(biddingService, "Bidding Service", "C++", "Взвешивает ставки, выбирает победителя")
+}
+
+Boundary(renderingCtx, "Bounded Context: Ad Rendering / Delivery") {
+  Container(deliveryService, "Delivery Service", "Node.js", "Формирует разметку баннера и ответ")
+}
+
+Boundary(financeCtx, "Bounded Context: Billing / Finance") {
+  Container(paymentService, "Payment Service", "Go", "Пополнение баланса")
+  Container(financialService, "Financial Service", "Go", "Списание средств и балансы")
+  ContainerDb(financeDb, "БД Финансы", "PostgreSQL", "Данные финансов (владелец: Finance)")
+}
+
+Boundary(statsCtx, "Bounded Context: Statistics / Event Store") {
+  Container(statsService, "Statistics Service", "Python", "Сохраняет клики и показы")
+  ContainerDb(eventsDb, "БД События", "ClickHouse", "Клики и показы (владелец: Statistics)")
+}
+
+Boundary(analyticsCtx, "Bounded Context: Analytics / Reporting") {
+  Container(analyticsService, "Analytics Service", "Python", "Готовит отчёты")
+  ContainerDb(reportDb, "БД Отчёты", "PostgreSQL / Object Storage", "Готовые отчёты (владелец: Analytics)")
+}
+
+Boundary(cabinetCtx, "Bounded Context: Advertiser Experience") {
+  Container(adCabinet, "Advertiser Dashboard", "Node.js", "Личный кабинет рекламодателя")
+}
+
+Boundary(redis, "Redis") {
+  Container(campaignCache, "Кеш кампаний", "Проекция Campaign для hot path")
+  Container(winnerCache, "Кеш победителей", "Проекция Bidding")
+  Container(balanceCache, "Кеш балансов", "Проекция Finance для hot path")
+}
+
+Boundary(kafka, "Kafka — интеграция контекстов") {
+  Container(clickTopic, "Топик кликов/показов")
+  Container(campaignTopic, "Топик кампаний")
+  Container(paymentTopic, "Топик платежей")
+  Container(balanceTopic, "Топик балансов")
+  Container(reqReportTopic, "Топик заказов отчётов")
+  Container(respReportTopic, "Топик готовности отчётов")
+}
+
+Rel(dspPartner, B2BGateway, "Bid-requests", "HTTPS/OpenRTB")
+Rel(endUser, B2CGateway, "Показ и клики", "HTTPS/REST")
+Rel(advertiser, DashboardGateway, "Работа в кабинете", "HTTPS/REST")
+Rel(paymentService, paymentGateway, "Пополнение бюджета", "HTTPS/REST")
+
+Rel(B2BGateway, adServer, "Bid-requests", "gRPC")
+Rel(B2CGateway, deliveryService, "Запрос баннера", "gRPC")
+Rel(DashboardGateway, adCabinet, "Запросы кабинета", "HTTPS/REST")
+
+Rel(adCabinet, campaignService, "Управление кампаниями", "HTTPS/REST")
+Rel(adCabinet, paymentService, "Пополнение баланса", "HTTPS/REST")
+
+Rel(adServer, biddingService, "Передаёт кандидатов", "gRPC")
+
+Rel(biddingService, deliveryService, "Передаёт победителя", "gRPC")
+
+Rel(adServer, campaignCache, "Читает проекцию кампаний", "Redis")
+Rel(biddingService, balanceCache, "Читает проекцию баланса", "Redis")
+Rel(biddingService, winnerCache, "Пишет победителя", "Redis")
+Rel(deliveryService, winnerCache, "Читает победителя", "Redis")
+Rel(deliveryService, campaignCache, "Читает креатив (проекция)", "Redis")
+
+Rel(campaignService, campaignDb, "Читает/пишет", "SQL")
+Rel(campaignService, campaignTopic, "Публикует изменения", "Kafka")
+
+Rel(paymentService, paymentTopic, "Публикует факты платежей", "Kafka")
+Rel(financialService, financeDb, "Читает/пишет", "SQL")
+Rel(financialService, balanceTopic, "Публикует изменения баланса", "Kafka")
+
+Rel(statsService, clickTopic, "Читает клики/показы", "Kafka")
+Rel(statsService, eventsDb, "Пишет события", "SQL")
+
+Rel(deliveryService, clickTopic, "Пишет клики/показы", "Kafka")
+
+Rel(analyticsService, reqReportTopic, "Читает заказы отчётов", "Kafka")
+Rel(analyticsService, clickTopic, "Читает события", "Kafka")
+Rel(analyticsService, respReportTopic, "Пишет готовность отчёта", "Kafka")
+Rel(analyticsService, reportDb, "Читает/пишет готовые отчёты", "SQL")
+
+Rel(adCabinet, reqReportTopic, "Заказывает отчёт", "Kafka")
+Rel(adCabinet, respReportTopic, "Читает готовность", "Kafka")
+
+Rel(campaignTopic, campaignCache, "Проекция обновляется из событий", "Kafka → Redis")
+Rel(balanceTopic, balanceCache, "Проекция обновляется из событий", "Kafka → Redis")
+
+@enduml
