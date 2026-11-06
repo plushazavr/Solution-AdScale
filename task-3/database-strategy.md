@@ -1,5 +1,5 @@
 # Database per Service
- 
+  
 | Сервис                         | Тип базы данных                                                                           | Обоснование                                                                                                            |
 | ------------------------------ | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Сервис ставок (Bidding)        | Нет своей БД. Использует только кеш Redis и локальный кеш кампаний, баланса и победителей | Hot path, SLA менее 80 мс. Своих постоянных данных нет                                                                 |
@@ -7,7 +7,7 @@
 | Сервис статистики (Statistics) | ClickHouse                                                                                | Высокий поток на запись событий                                                                                        |
 | Сервис аналитики (Analytics)   | PostgreSQL / Object Storage                                                               | Отчёты большие по объему памяти, поэтому Object Storage для тяжёлых файлов. PostgreSQL - для метаданных к этим отчетам |
 | Сервис финансов (Financial)    | PostgreSQL                                                                                | Требуется ACID, соблюдение идемпотентности                                                                             |
- 
+  
 ## Financial Service: SQL-транзакция и Kafka offset
 
 При обработке события показа (или списания) из Kafka Financial Service выполняет два связанных действия:
@@ -49,3 +49,72 @@
 4. Баланс не изменяется
 5. Offset фиксируется, обработка завершается
 6. Результат: safe redelivery — дубль не создал двойное списание
+
+## Transactional Outbox
+
+При создании резерва Bidding Service должен ответить DSP в течение SLA < 80 мс. Событие `reserve_pending` нужно надёжно записать в Kafka для восстановления резервов.
+
+Если Bidding Service отправляет bid-response DSP, но падает до того, как `reserve_pending` попадает в Kafka, то при восстановлении Redis из Kafka резерв будет потерян, а деньги заморожены в Redis, но не учтены в журнале. Outbox устраняет это. Событие записывается в таблицу `outbox` в той же SQL-транзакции, что и резерв. После commit транзакции Outbox-Consumer доставляет событие в Kafka.
+
+### Таблица outbox_events
+
+| Поле | Тип | Назначение |
+| --- | --- | --- |
+| `id` | uuid | PK |
+| `aggregate_id` | text | requestId (аукцион) |
+| `event_type` | text | reserve_pending / reserve_confirmed / reserve_released |
+| `payload` | jsonb | Событие для `balanceTopic` |
+| `status` | text | pending / published / failed |
+| `created_at` | timestamp | Время создания |
+| `published_at` | timestamp | Время доставки в Kafka |
+
+### Запись и доставка
+
+Financial Service при создании резерва выполняет две операции в одной SQL-транзакции: INSERT в `reservations` (status=`pending`) + INSERT в `outbox_events` (event_type=`reserve_pending`). Commit транзакции фиксирует оба действия.
+
+Outbox consumer отдельный процесс в Financial Service, который каждые 200-300мс (т.к. это не hot path, то не влияет на общий SLA 80мс, и обеспечит баланс нагрузки на PostgreSQL) опрашивает `outbox_events` по статусу `pending`, батчами по 100 событий отправляет их в `balanceTopic` (продюсер с `acks=all`), и при успешной доставке обновляет статус на `published`. Если Outbox consumer упал после отправки и до обновления статуса, то событие будет доставлено повторно. At-least-once гарантия Kafka + идемпотентность консьюмеров (по `event_id`) защищают от дублей.
+
+### Нормальный сценарий
+
+1. DSP → bid-request → Bidding Service
+2. Bidding Service резервирует баланс в Redis (Lua-скрипт)
+3. Bidding Service → Financial Service (gRPC): `createReservation`
+4. Financial Service: SQL-транзакция (reservations + outbox_events) → commit
+5. Bidding Service отправляет bid-response DSP
+6. Outbox consumer читает событие, отправляет в `balanceTopic`
+7. Redis-консьюмер (`group-cache-campaigns`) обновляет `reserve:{requestId}`
+
+### Частичный успех
+
+Redis-резерв выделен, bid-response отправлен DSP, но Financial Service упал до commit SQL.
+
+1. Redis: баланс уменьшен, `reserve:{requestId}` создан
+2. DSP получил ставку
+3. Financial Service упал до commit SQL, reservations не записан, outbox пуст
+4. TTL резерва истёк. Financial Service возвращает баланс через `reserve_released`
+5. Событие `reserve_released` записывается в Outbox → Kafka
+
+Частичный успех обрабатывается TTL резерва в Redis. Поскольку `reserve_pending` не попало в Outbox, Outbox consumer ничего не отправит. Таймер обнаружит резерв без записи в БД и вернёт баланс.
+
+### Outbox consumer упал после publish
+
+1. Outbox consumer отправил событие в Kafka
+2. Перед обновлением статуса на `published` процесс упал
+3. При перезапуске событие прочитается повторно
+4. Kafka-продюсер отправит дубль в `balanceTopic`
+5. Консьюмер Redis получает дубль, но игнорирует по `event_id`
+6. Результат: at-least-once доставка, идемпотентность защищает от дублей
+
+## Таблица blocked_balances
+
+При рассогласовании Redis и PostgreSQL (например, RedisReplayer обнаружил резерв в Redis, которого нет в БД) разница блокируется в таблице `blocked_balances` Financial PostgreSQL.
+
+| Поле | Тип | Назначение |
+| --- | --- | --- |
+| `advertiser_id` | text | Рекламодатель |
+| `amount` | numeric | Заблокированная сумма |
+| `reason` | text | reserve_pending_drift / sync_in_progress |
+| `created_at` | timestamp | Момент блокировки |
+| `released_at` | timestamp | Момент разблокировки |
+
+Пока `blocked_balance > 0`, Financial Service не подтверждает резервы для новых аукционов рекламодателя. Блокировка снимается после завершения восстановления согласованности.
